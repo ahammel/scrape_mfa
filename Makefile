@@ -10,7 +10,7 @@ $(REQUESTS) $(BLACK): $(VENV)
 	source $(VENV) && pip install -r requirements.txt
 
 $(VENV):
-	virtualenv python --python=python3
+	python3 -m venv python
 
 run: $(REQUESTS) $(VENV)
 	source $(VENV) && python scrape_mfa.py
