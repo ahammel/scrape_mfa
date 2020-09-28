@@ -1,3 +1,8 @@
+"""scrape_mfa.py
+
+Captures the contents of the /r/malefashionadvice Daily Questions thread.
+
+"""
 #!/usr/bin/env python3
 import argparse
 import csv
@@ -88,11 +93,20 @@ COMMENT_FIELDS = [
 
 
 def initialize_output_file():
+    """Creates the output file if it does not exist."""
     if not os.path.exists(OUTPUT_FILE):
         open(OUTPUT_FILE, "w+")
 
 
 def initial_page_boundary():
+    """Return the initial time to start capturing comments.
+
+    If the output file is already present, returns the time stamp one second
+    before the most recent thread captured in the output file.
+
+    If the output file is absent or empty, returns the timestamp corresponding
+    to May 06, 2017 (the day after the Simple Questions rule was implemented)
+    """
     try:
         with open(OUTPUT_FILE, "r") as handle:
             reader = csv.DictReader(
@@ -108,7 +122,7 @@ def initial_page_boundary():
             # ^ fetch the latest page again as it might not have been
             # completely scraped if the previous run crashed halfyway through a
             # thread
-    except FileNotFoundError as err:
+    except FileNotFoundError:
         return START_TIME
 
 
@@ -117,10 +131,9 @@ def fetch_dq_thread_ids(
     after,
     page_size=100,
 ):
+    """Yields the id, title, and created time for all Daily Questions threads."""
     # Replacing all this gnarly imperative code with a paginator object is left
     # as an exercise to the reader
-    pages_fetched = 0
-
     while True:
         page = fetch_dq_thread_page(
             search_term=search_term, page_size=page_size, after=after
@@ -142,6 +155,7 @@ def fetch_dq_thread_ids(
 
 
 def fetch_dq_thread_page(search_term, after, page_size=100):
+    """Returns a page of Daily Questions thread metadata as a list """
     params = {
         "subreddit": "malefashionadvice",
         "author": "AutoModerator",
@@ -153,7 +167,7 @@ def fetch_dq_thread_page(search_term, after, page_size=100):
         "size": page_size,
         "after": after,
     }
-    json = fetch_json(
+    response = fetch_json(
         f"{BASE_URL}/reddit/search/submission",
         params=params,
     )
@@ -163,17 +177,18 @@ def fetch_dq_thread_page(search_term, after, page_size=100):
             "thread_created_utc": row["created_utc"],
             "thread_title": row["title"],
         }
-        for row in json["data"]
+        for row in response["data"]
     ]
 
 
 def fetch_comment_ids(threads):
+    """Yield the comment IDs for each thread in `threads`"""
     for thread in threads:
         thread_id = thread["thread_id"]
-        json = fetch_json(
+        response = fetch_json(
             f"{BASE_URL}/reddit/submission/comment_ids/{thread_id}"
         )
-        data = json["data"]
+        data = response["data"]
         print(
             f"Fetched {len(data)} comment IDs for thread"
             f" '{thread['thread_title']}' ({thread_id})"
@@ -187,17 +202,18 @@ def fetch_comment_ids(threads):
 
 
 def fetch_comments(comments):
-    # Restructure comments list as a dict in order to loo up the thread info
+    """Yields the full comment data for each comment in the input"""
+    # Restructure comments list as a dict in order to look up the thread info
     # later
     comment_dict = {comment["id"]: comment for comment in comments}
-    json = fetch_json(
+    response = fetch_json(
         f"{BASE_URL}/reddit/search/comment",
         params={
             "ids": ",".join(comment_dict.keys()),
             "fields": COMMENT_FIELDS,
         },
     )
-    data = json["data"]
+    data = response["data"]
     print(f"Fetched {len(data)} comments")
     for comment in data:
         thread_info = comment_dict[comment["id"]]
@@ -208,18 +224,22 @@ def fetch_comments(comments):
 
 
 def correct_parent_id(comment):
-    # The 'parent_id' field of a comment is prefixed with 't1_' if the parent
-    # entity is another comment, or 't3_' if the parent is a link or a
-    # submission[1].
-    #
-    # For my purposes (e.g., determining whether a comment is top level or a
-    # reply) this is inconvenient. If the prefix is 't1_', I strip the prefix
-    # so that the 'parent_id' properly foreign keys to the parent comment. If
-    # the prefix is 't3_' I replace the parent id with None.
-    #
-    # [1] I'm pretty sure. This behaviour isn't documented, but that's my
-    # interpretation of this stanza:
-    # https://github.com/pushshift/api/blob/ded75fadbc4bf4a3ea4b5cf4518b5bd4e2d7ca1e/api/Comment.py#L39-L45
+    """Normalize the "parent_id" field of a comment object.
+
+    When fetching data from PushShift the 'parent_id' field of a comment is
+    prefixed with 't1_' if the parent entity is another comment, or 't3_' if
+    the parent is a link or a submission[1].
+
+    For my purposes (e.g., determining whether a comment is top level or a
+    reply) this is inconvenient. If the prefix is 't1_', I strip the prefix
+    so that the 'parent_id' properly foreign keys to the parent comment. If
+    the prefix is 't3_' I replace the parent id with None.
+
+    [1] I'm pretty sure. This behaviour isn't documented, but that's my
+    interpretation of this stanza:
+    https://github.com/pushshift/api/blob/ded75fadbc4bf4a3ea4b5cf4518b5bd4e2d7ca1e/api/Comment.py#L39-L45
+
+    """
     if comment["parent_id"].startswith("t1_"):
         comment["parent_id"] = comment["parent_id"][3:]
     elif comment["parent_id"].startswith("t3_"):
@@ -228,6 +248,7 @@ def correct_parent_id(comment):
 
 
 def csvify_comments(comments, handle):
+    """Write the contents of an iterable of comment objects in tsv format."""
     writer = csv.DictWriter(
         handle,
         fieldnames=COMMENT_FIELDS,
@@ -239,6 +260,7 @@ def csvify_comments(comments, handle):
 
 
 def deduplicate(in_handle, out_handle):
+    """Remove duplicate comments form the output file. """
     reader = csv.DictReader(
         in_handle,
         fieldnames=COMMENT_FIELDS,
@@ -258,17 +280,23 @@ def deduplicate(in_handle, out_handle):
     return comment_ids
 
 
-def fetch_json(url, params = None):
-    r = requests.get(url, params)
-    if r.status_code == 200:
+def fetch_json(url, params=None):
+    """Execute an HTTP GET call and return the body of the response.
+
+    Throws an Exception if the call does not return 200 or if the response body
+    is not in JSON format.
+
+    """
+    resp = requests.get(url, params)
+    if resp.status_code == 200:
         try:
-            return r.json()
+            return resp.json()
         except json.decoder.JSONDecodeError:
             pass
     raise Exception(
         f"Failed to fetch from {url} with params {params}"
-        f"\n\nStatus code: {r.status_code}"
-        f"\nBody:\n{r.text}"
+        f"\n\nStatus code: {resp.status_code}"
+        f"\nBody:\n{resp.text}"
     )
 
 
@@ -280,8 +308,13 @@ def chunk(size, iterable):
 
     """
 
-    class Sentinel(object):
-        pass
+    class Sentinel:
+        """Represents a null value.
+
+        Useful in situations where `None` is a valid input that should be
+        treated differently from an absent value.
+
+        """
 
     sentinel_value = Sentinel()
     # Use a private type as the sentinel value so that the iterable can contain
@@ -290,10 +323,14 @@ def chunk(size, iterable):
         *[iter(iterable)] * size, fillvalue=sentinel_value
     )
     # wtf. This is stackoverflow copypasta (as if that isn't obvious)
-    return ([x for x in chunk if x is not sentinel_value] for chunk in zipped)
+    return ([x for x in xs if x is not sentinel_value] for xs in zipped)
 
 
 def scrape_mfa(columns_file, deduplicated_file, output_file):
+    """Write the contents of the /r/malefashionadvice Daily Questions threads
+    to a file.
+
+    """
     with open(columns_file, "w+") as handle:
         csv.DictWriter(
             handle, fieldnames=COMMENT_FIELDS, dialect="excel-tab"
@@ -329,8 +366,17 @@ def scrape_mfa(columns_file, deduplicated_file, output_file):
 
 
 def main(columns_file, output_file, deduplicated_file):
+    """Main process.
+
+    Performs the `scrape_mfa` subroutine, restarting automatically if there is
+    an error.
+
+    Restarts a maximum of seven times with a quadratically increasing cool off
+    period.
+
+    """
     done = False
-    sleeps =  [80, 60, 30, 20, 10, 10, 0]
+    sleeps = [80, 60, 30, 20, 10, 10, 0]
     while True:
         try:
             scrape_mfa(

@@ -1,4 +1,4 @@
-.PHONY: b black l lint pylint run
+.PHONY: b black l lint ls list-source-files pylint run
 
 SRC_FILES = ./scrape_mfa.py
 
@@ -24,3 +24,6 @@ b black: $(BLACK) $(VENV)
 
 l lint pylint: $(PYLINT) $(VENV)
 	source $(VENV) && pylint $(SRC_FILES)
+
+ls list-source-files:
+	@echo $(SRC_FILES)
